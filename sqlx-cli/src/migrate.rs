@@ -163,7 +163,7 @@ sqlx::migrate!({}).run(<&your_pool OR &mut your_connection>).await?;
 Note that the compiler won't pick up new migrations if no Rust source files have changed.
 You can create a Cargo build script to work around this with `sqlx migrate build-script`.
 
-See: https://docs.rs/sqlx/0.5/sqlx/macro.migrate.html
+See: https://docs.rs/sqlx/latest/sqlx/macro.migrate.html
 "#,
             quoted_source
         );
