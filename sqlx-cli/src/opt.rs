@@ -1,6 +1,8 @@
 use std::ops::{Deref, Not};
 
 use clap::{Args, Parser};
+#[cfg(feature = "completions")]
+use clap_complete::Shell;
 
 #[derive(Parser, Debug)]
 #[clap(version, about, author)]
@@ -16,8 +18,8 @@ pub enum Command {
 
     /// Generate query metadata to support offline compile-time verification.
     ///
-    /// Saves metadata for all invocations of `query!` and related macros to `sqlx-data.json`
-    /// in the current directory, overwriting if needed.
+    /// Saves metadata for all invocations of `query!` and related macros to a `.sqlx` directory
+    /// in the current directory (or workspace root with `--workspace`), overwriting if needed.
     ///
     /// During project compilation, the absence of the `DATABASE_URL` environment variable or
     /// the presence of `SQLX_OFFLINE` (with a value of `true` or `1`) will constrain the
@@ -29,9 +31,12 @@ pub enum Command {
         #[clap(long)]
         check: bool,
 
-        /// Generate a single top-level `sqlx-data.json` file when using a cargo workspace.
+        /// Generate a single workspace-level `.sqlx` folder.
+        ///
+        /// This option is intended for workspaces where multiple crates use SQLx. If there is only
+        /// one, it is better to run `cargo sqlx prepare` without this option inside that crate.
         #[clap(long)]
-        merged: bool,
+        workspace: bool,
 
         /// Arguments to be passed to `cargo rustc ...`.
         #[clap(last = true)]
@@ -43,6 +48,10 @@ pub enum Command {
 
     #[clap(alias = "mig")]
     Migrate(MigrateOpt),
+
+    #[cfg(feature = "completions")]
+    /// Generate shell completions for the specified shell
+    Completions { shell: Shell },
 }
 
 /// Group of commands for creating and dropping your database.
@@ -94,35 +103,52 @@ pub enum DatabaseCommand {
 /// Group of commands for creating and running migrations.
 #[derive(Parser, Debug)]
 pub struct MigrateOpt {
-    /// Path to folder containing migrations.
-    /// Warning: deprecated, use <SUBCOMMAND> --source <SOURCE>
-    #[clap(long, default_value = "migrations")]
-    pub source: String,
-
     #[clap(subcommand)]
     pub command: MigrateCommand,
 }
 
 #[derive(Parser, Debug)]
 pub enum MigrateCommand {
-    /// Create a new migration with the given description,
-    /// and the current time as the version.
+    /// Create a new migration with the given description.
+    ///
+    /// A version number will be automatically assigned to the migration.
+    ///
+    /// For convenience, this command will attempt to detect if sequential versioning is in use,
+    /// and if so, continue the sequence.
+    ///
+    /// Sequential versioning is inferred if:
+    ///
+    /// * The version numbers of the last two migrations differ by exactly 1, or:
+    ///
+    /// * only one migration exists and its version number is either 0 or 1.
+    ///
+    /// Otherwise timestamp versioning is assumed.
+    ///
+    /// This behavior can overridden by `--sequential` or `--timestamp`, respectively.
     Add {
         description: String,
 
         #[clap(flatten)]
-        source: SourceOverride,
+        source: Source,
 
         /// If true, creates a pair of up and down migration files with same version
         /// else creates a single sql file
         #[clap(short)]
         reversible: bool,
+
+        /// If set, use timestamp versioning for the new migration. Conflicts with `--sequential`.
+        #[clap(short, long)]
+        timestamp: bool,
+
+        /// If set, use timestamp versioning for the new migration. Conflicts with `--timestamp`.
+        #[clap(short, long, conflicts_with = "timestamp")]
+        sequential: bool,
     },
 
     /// Run all pending migrations.
     Run {
         #[clap(flatten)]
-        source: SourceOverride,
+        source: Source,
 
         /// List all the migrations to be run without applying
         #[clap(long)]
@@ -133,12 +159,17 @@ pub enum MigrateCommand {
 
         #[clap(flatten)]
         connect_opts: ConnectOpts,
+
+        /// Apply migrations up to the specified version. If unspecified, apply all
+        /// pending migrations. If already at the target version, then no-op.
+        #[clap(long)]
+        target_version: Option<i64>,
     },
 
     /// Revert the latest migration with a down file.
     Revert {
         #[clap(flatten)]
-        source: SourceOverride,
+        source: Source,
 
         /// List the migration to be reverted without applying
         #[clap(long)]
@@ -149,12 +180,18 @@ pub enum MigrateCommand {
 
         #[clap(flatten)]
         connect_opts: ConnectOpts,
+
+        /// Revert migrations down to the specified version. If unspecified, revert
+        /// only the last migration. Set to 0 to revert all migrations. If already
+        /// at the target version, then no-op.
+        #[clap(long)]
+        target_version: Option<i64>,
     },
 
     /// List all available migrations.
     Info {
         #[clap(flatten)]
-        source: SourceOverride,
+        source: Source,
 
         #[clap(flatten)]
         connect_opts: ConnectOpts,
@@ -165,7 +202,7 @@ pub enum MigrateCommand {
     /// Must be run in a Cargo project root.
     BuildScript {
         #[clap(flatten)]
-        source: SourceOverride,
+        source: Source,
 
         /// Overwrite the build script if it already exists.
         #[clap(long)]
@@ -186,27 +223,6 @@ impl Deref for Source {
 
     fn deref(&self) -> &Self::Target {
         &self.source
-    }
-}
-
-/// Argument for overriding migration scripts source.
-// Note: once `MigrateOpt.source` is removed, usage can be replaced with `Source`.
-#[derive(Args, Debug)]
-pub struct SourceOverride {
-    /// Path to folder containing migrations [default: migrations]
-    #[clap(long)]
-    source: Option<String>,
-}
-
-impl SourceOverride {
-    /// Override command's `source` flag value with subcommand's
-    /// `source` flag value when provided.
-    #[inline]
-    pub(super) fn resolve<'a>(&'a self, source: &'a str) -> &'a str {
-        match self.source {
-            Some(ref source) => source,
-            None => source,
-        }
     }
 }
 

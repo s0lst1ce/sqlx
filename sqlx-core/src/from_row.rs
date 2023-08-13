@@ -1,5 +1,4 @@
-use crate::error::Error;
-use crate::row::Row;
+use crate::{error::Error, row::Row};
 
 /// A record that can be built from a row returned by the database.
 ///
@@ -123,6 +122,41 @@ use crate::row::Row;
 ///
 /// This field is compatible with the `default` attribute.
 ///
+/// #### `skip`
+///
+/// This is a variant of the `default` attribute which instead always takes the value from
+/// the `Default` implementation for this field type ignoring any results in your query.
+/// This can be useful, if some field does not satifisfy the trait bounds (i.e.
+/// `sqlx::decode::Decode`, `sqlx::type::Type`), in particular in case of nested structures.
+/// For example:
+///
+/// ```rust,ignore
+/// #[derive(sqlx::FromRow)]
+/// struct Address {
+///     user_name: String,
+///     street: String,
+///     city: String,
+/// }
+///
+/// #[derive(sqlx::FromRow)]
+/// struct User {
+///     name: String,
+///     #[sqlx(skip)]
+///     addresses: Vec<Address>,
+/// }
+/// ```
+///
+/// Then when querying into `User`, only `name` needs to be set:
+///
+/// ```rust,ignore
+/// let user: User = sqlx::query_as("SELECT name FROM users")
+///    .fetch_one(&mut some_connection)
+///    .await?;
+///
+/// `Default` for `Vec<Address>` is an empty vector.
+/// assert!(user.addresses.is_empty());
+/// ```
+///
 /// ## Manual implementation
 ///
 /// You can also implement the [`FromRow`] trait by hand. This can be useful if you
@@ -175,6 +209,48 @@ use crate::row::Row;
 ///
 /// In MySql, `BigInt` type matches `i64`, but you can convert it to `u64` by `try_from`.
 ///
+/// #### `json`
+///
+/// If your database supports a JSON type, you can leverage `#[sqlx(json)]`
+/// to automatically integrate JSON deserialization in your [`FromRow`] implementation using [`serde`](https://docs.rs/serde/latest/serde/).
+///
+/// ```rust,ignore
+/// #[derive(serde::Deserialize)]
+/// struct Data {
+///     field1: String,
+///     field2: u64
+/// }
+///
+/// #[derive(sqlx::FromRow)]
+/// struct User {
+///     id: i32,
+///     name: String,
+///     #[sqlx(json)]
+///     metadata: Data
+/// }
+/// ```
+///
+/// Given a query like the following:
+///
+/// ```sql
+/// SELECT
+///     1 AS id,
+///     'Name' AS name,
+///     JSON_OBJECT('field1', 'value1', 'field2', 42) AS metadata
+/// ```
+///
+/// The `metadata` field will be deserialized used its `serde::Deserialize` implementation:
+///
+/// ```rust,ignore
+/// User {
+///     id: 1,
+///     name: "Name",
+///     metadata: Data {
+///         field1: "value1",
+///         field2: 42
+///     }
+/// }
+/// ```
 pub trait FromRow<'r, R: Row>: Sized {
     fn from_row(row: &'r R) -> Result<Self, Error>;
 }
